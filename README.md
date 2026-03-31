@@ -58,16 +58,22 @@ S3 raw CSVs → bronze_circuits, bronze_drivers, bronze_constructors,
 
 ---
 
-### Step 4 — Streaming Layer (Kafka)
-Simultaneously with batch ingestion, a Kafka producer script reads `lap_times.csv` row by row with a small delay between each message, simulating live race telemetry arriving in real time. A Spark Structured Streaming consumer reads from the Kafka topic and writes micro-batches into a separate Bronze streaming Delta table.
+### Step 4 — Streaming Layer (Kafka + OpenF1 API)
+During a live race weekend, a Kafka producer script calls the OpenF1 API every 2-3 seconds, fetching car telemetry for all 20 drivers in a single session-level call. Each driver's record is published as an individual Kafka message. A Spark Structured Streaming consumer reads from the Kafka topic with `processingTime="0 seconds"` — processing each message the moment it arrives with no artificial delay. Results write to a Bronze streaming Delta table in near real time (~3-5 second end-to-end latency from track to table).
 
 ```
-kafka_producer.py → Kafka topic: f1-lap-telemetry
-                 → kafka_consumer_streaming.py
-                 → bronze_lap_telemetry_stream (Delta, streaming)
+OpenF1 API (car_data endpoint, all drivers per call)
+  → kafka_producer.py publishes per-driver messages
+  → Kafka topic: f1-lap-telemetry
+  → kafka_consumer_streaming.py (Spark Structured Streaming)
+  → bronze_lap_telemetry_stream (Delta, continuous)
 ```
 
-This simulates what a real F1 data pipeline looks like during a live race weekend — telemetry arriving continuously per driver per lap.
+**Between races:** The Kafka producer is stopped — no messages, no processing, no cost. It restarts when the next session begins (OpenF1 goes live 30 minutes before each session starts).
+
+**Rate limit strategy:** Free tier allows 30 req/min. One session-level call returns all 20 drivers simultaneously. At one call per 2-3 seconds that is ~20-30 calls per minute — right at the limit but manageable. Weather endpoint polled every 15 seconds — barely touches quota.
+
+**Why not replay a static CSV?** Using a real API call pattern is architecturally identical to what a production F1 data pipeline actually does. The producer is swappable between historical replay (for testing) and live API (for race weekends) by changing one line.
 
 ---
 
@@ -175,12 +181,14 @@ After the initial project is complete, 2025 season data is loaded through the ex
 
 ## 📂 Data Sources
 
-| Dataset | Source | Author | Files | Coverage |
-|---|---|---|---|---|
-| Formula 1 World Championship | Kaggle | Vopani | 14 CSVs | 1950–2024 |
-| Formula 1 Race Data | Kaggle | James Trotman | 14 CSVs | 2025 season |
-| Live lap telemetry | Kafka simulation | — | lap_times.csv replayed | Real-time sim |
-| 2026 early results | Manual pull | — | — | Post-build validation |
+| Name | Author | Why | Layer | Update Frequency | Link |
+|---|---|---|---|---|---|
+| Formula 1 Race Data | James Trotman | Primary historical batch source — full Ergast schema, 14 CSVs covering races, results, lap times, qualifying, pit stops, constructors, drivers. Most current Kaggle dataset available, goes to 2026 Race 1. | Bronze batch | Monthly after each race weekend | [kaggle.com/datasets/jtrotman/formula-1-race-data](https://www.kaggle.com/datasets/jtrotman/formula-1-race-data) |
+| Formula 1 Race Events | James Trotman | Safety car deployments, virtual safety cars, and red flags per race. Enriches race results with incident context — directly affects championship points and race strategy analysis. | Bronze batch | Monthly after each race weekend | [kaggle.com/datasets/jtrotman/formula-1-race-events](https://www.kaggle.com/datasets/jtrotman/formula-1-race-events) |
+| OpenF1 API — Car Telemetry | OpenF1 (community) | Real car telemetry at 3.7Hz — speed, throttle, brake, RPM, gear, X/Y/Z coordinates for all 20 drivers. Kafka producer calls this API every 2-3 seconds (one call returns all drivers), publishes each driver record as a Kafka message. ~3 second delay from real events — faster than TV broadcast. | Kafka streaming (live during races) | Live during sessions. Historical from 2023 onwards. | [openf1.org](https://openf1.org) |
+| OpenF1 API — Weather | OpenF1 (community) | Track temperature, air temperature, humidity, rainfall, and wind speed per session. Used as ML features for lap time prediction and race strategy modeling. Polled every 10-15 seconds — well within free tier rate limits. | Bronze batch (historical) / Kafka streaming (live) | Live during sessions. Historical from 2023 onwards. | [openf1.org](https://openf1.org) |
+
+> **⚠️ OpenF1 rate limit note (free tier):** 3 req/sec and 30 req/min. Handled by session-level batching — one API call returns all 20 drivers simultaneously rather than individual per-driver calls. At one call per 2-3 seconds during a live race, this stays well within limits while delivering genuinely real-time data (~3 second delay from track events).
 
 ---
 
@@ -252,8 +260,8 @@ SQL is more readable than PySpark for analytical transformations. dbt handles de
 **Why Great Expectations over custom checks?**  
 Writing `if df.null_count() > 0: raise Exception` works but signals tutorial-level thinking. Great Expectations is an industry-recognized tool used in production data teams. It produces shareable HTML validation reports, integrates naturally with pipeline orchestration, and signals professional ecosystem awareness to any interviewer. At the junior/internship level, tool recognition matters.
 
-**Why Kafka simulation instead of a live API?**  
-The architecture is identical to real telemetry ingestion — a producer publishes messages, a consumer processes them via Spark Structured Streaming. There are no API rate limits, no costs, and no dependency on an external service being available. The producer script is swappable for a real Ergast API poller in under 30 minutes — and that replaceability is itself a sign of good architecture.
+**Why OpenF1 API for streaming instead of replaying a static CSV?**  
+Using a real API call pattern is architecturally identical to what a production F1 data pipeline actually does — a producer polls an endpoint, publishes messages, a consumer processes them via Spark Structured Streaming. OpenF1 is free, requires no authentication, and delivers data with ~3 second latency from real track events. The free tier rate limit (30 req/min) is managed by batching all 20 drivers in a single session-level call rather than individual per-driver polling. The producer is also swappable between live API and historical session replay by changing one line — that replaceability is itself a sign of good architecture.
 
 **Why partition by year on large tables?**  
 Query patterns in F1 analytics are almost always season-filtered — "show me Verstappen's lap times in 2023" not "show me all lap times ever." Partitioning `lap_times` and `results` by year means Spark only scans the relevant partition, eliminating full table scans on tables with millions of rows.
