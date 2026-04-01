@@ -11,9 +11,7 @@ terraform_code/crash.log
 .aws/
 *.pem
 *.key
-.configs/credentials.ipynb
-.configs/secrets
-secrets2
+configs/credentials.ipynb
 
 # Python
 __pycache__/
