@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: silver
+    catalog: formone
+    schema: silver
+    tables:
+      - name: race_data_circuits
+      - name: race_data_constructors
+      - name: race_data_drivers
+      - name: race_data_races
+      - name: race_data_results
+      - name: race_data_qualifying
+      - name: race_data_lap_times
+      - name: race_data_pit_stops
+      - name: race_data_sprint_results
+      - name: race_data_driver_standings
+      - name: race_data_constructor_standings
+      - name: race_data_status
+      - name: race_events_safety_cars
+      - name: race_events_red_flags
+      - name: race_events_fatal_accidents_drivers
+      - name: race_events_fatal_accidents_marshalls
