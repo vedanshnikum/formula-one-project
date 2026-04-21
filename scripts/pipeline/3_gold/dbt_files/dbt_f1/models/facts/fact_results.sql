@@ -2,15 +2,15 @@ with pit_aggregates as (
     select
         race_key,
         driver_id,
-        count(*)        as pit_stop_count,
-        sum(duration_ms) as total_pit_time_ms
+        count(*)            as pit_stop_count,
+        sum(duration_ms)    as total_pit_time_ms
     from {{ ref('fact_pit_stops') }}
     group by race_key, driver_id
 )
 
 select
     r.race_key,
-    year(r.race_date)                       as year,
+    r.year,
     concat(d.forename, ' ', d.surname)      as driver_full_name,
     res.driverid                            as driver_id,
     t.name                                  as team_name,

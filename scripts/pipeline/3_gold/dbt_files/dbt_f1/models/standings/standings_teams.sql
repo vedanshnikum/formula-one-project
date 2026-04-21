@@ -1,6 +1,6 @@
 select
     r.race_key,
-    year(r.race_date)                       as year,
+    r.year,
     t.name                                  as team_name,
     cs.constructorid                        as team_id,
     cs.points,

@@ -1,6 +1,6 @@
 select
     r.race_key,
-    year(r.race_date)                   as year,
+    r.year,
     concat(d.forename, ' ', d.surname)  as driver_full_name,
     lt.driverid                         as driver_id,
     lt.lap,
