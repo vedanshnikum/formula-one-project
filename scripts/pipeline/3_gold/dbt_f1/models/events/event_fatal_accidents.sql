@@ -1,11 +1,11 @@
 select
-    driver                  as name,
+    driver                              as name,
     age,
     date_of_accident,
     event,
     car,
     session,
-    'Driver'                as type
+    'Driver'                            as type
 from {{ source('silver', 'race_events_fatal_accidents_drivers') }}
 
 union all
@@ -15,7 +15,7 @@ select
     age,
     date_of_accident,
     event,
-    cast(null as string)    as car,
-    cast(null as string)    as session,
-    'Marshal'               as type
+    cast(null as string)                as car,
+    cast(null as string)                as session,
+    'Marshal'                           as type
 from {{ source('silver', 'race_events_fatal_accidents_marshalls') }}

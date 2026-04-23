@@ -24,14 +24,12 @@ venv/
 
 # Databricks
 .databricks/
+formone-sql-server.session.sql
 databricks.yml.local
+databricks.yml
+typings/
 
 # dbt
-dbt_f1/target/
-dbt_f1/dbt_packages/
-dbt_f1/logs/
-dbt_f1/.user.yml
-dbt_f1/profiles.yml
 
 # Mac system files
 .DS_Store
