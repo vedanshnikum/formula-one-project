@@ -24,4 +24,4 @@ SELECT
   `Positions Gained`,
   `Pit Stops`,
   `Total Pit Time (ms)`
-FROM formone.dashboard.master;
+FROM formone.dashboard.historical_master;

@@ -19,4 +19,4 @@ SELECT
   `Finish Status`,
   `DNF`,
   `Pit Stops`
-FROM formone.dashboard.master;
+FROM formone.dashboard.historical_master;

@@ -13,4 +13,4 @@ SELECT DISTINCT
   `Team Championship Position`,
   `Team Championship Wins`,
   `Race Key`
-FROM formone.dashboard.master;
+FROM formone.dashboard.historical_master;

@@ -1,4 +1,4 @@
-CREATE OR REPLACE VIEW formone.dashboard.master AS
+CREATE OR REPLACE VIEW formone.dashboard.historical_master AS
 SELECT
   -- Race Info
   r.race_key                          AS `Race Key`,
