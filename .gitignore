@@ -24,7 +24,10 @@ venv/
 
 # Databricks
 .databricks/
+formone-sql-server.session.sql
 databricks.yml.local
+databricks.yml
+typings/
 
 # dbt
 dbt_f1/target/
