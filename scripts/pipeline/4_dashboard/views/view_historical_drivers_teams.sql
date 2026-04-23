@@ -1,0 +1,27 @@
+CREATE OR REPLACE VIEW formone.dashboard.historical_drivers_teams AS
+SELECT
+  `Race Key`,
+  `Season`,
+  `Race Name`,
+  `Race Date`,
+  `Driver`,
+  `Driver ID`,
+  `Driver Code`,
+  `Driver Nationality`,
+  `Date of Birth`,
+  `Team`,
+  `Team ID`,
+  `Team Nationality`,
+  `Car Number`,
+  `Grid Position`,
+  `Finish Position`,
+  `Points`,
+  `Laps Completed`,
+  `Fastest Lap Rank`,
+  `Fastest Lap Speed`,
+  `Finish Status`,
+  `DNF`,
+  `Positions Gained`,
+  `Pit Stops`,
+  `Total Pit Time (ms)`
+FROM formone.dashboard.master;
