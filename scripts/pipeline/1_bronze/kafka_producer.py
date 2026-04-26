@@ -5,7 +5,7 @@ from kafka import KafkaProducer
 
 KAFKA_BROKER = "localhost:9092"
 TOPIC = "f1-telemetry"
-SESSION_KEY = 9693  # Melbourne 2025 Race
+SESSION_KEY = "latest"  # Melbourne 2025 Race
 POLL_INTERVAL = 3
 DRIVER_NUMBERS = [1, 4, 6, 10, 11, 14, 16, 18, 20, 22, 23, 24, 27, 30, 31, 38, 44, 55, 63, 81]
 
