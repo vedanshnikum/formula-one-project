@@ -2,7 +2,7 @@
 
 A production-grade data engineering platform that ingests 75 years of Formula 1 race data, processes it through a full medallion architecture, predicts the **2026 F1 World Championship**, and generates a natural language analyst breakdown powered by an LLM.
 
-**Built with:** Terraform · AWS S3 · Apache Kafka · Databricks · Delta Lake · dbt · scikit-learn · LLM Analyst · Power BI · Streamlit · GitHub Actions
+**Built with:** Terraform · AWS S3 · Apache Kafka · Databricks · Delta Lake · Great Expectations · dbt · scikit-learn · LLM Analyst · GitHub Actions
 
 > Detailed architecture decisions, data quality observations, and phase-by-phase notes are documented in [`docs/`](./docs/).
 
@@ -21,17 +21,17 @@ The 2026 season is already underway. As races complete, the pipeline ingests new
 ## Architecture Overview
 ```
 Kaggle API ──────────────────────────────────► S3 (raw landing)
-                                                    │
-OpenF1 API ──► Kafka ──► Spark Streaming ──► Bronze Delta Tables
-                                                    │
-                                                Silver (cleaned)
-                                                    │
+                                                       │
+OpenF1 API ──► Kafka ──► Spark Streaming ──► Bronze Delta Tables (GE + custom checks)
+                                                       │
+                                      Silver (cleaned) (GE + custom checks)
+                                                        │
                                                 Gold (dbt models)
-                                                    │
-                    ┌───────────────────────────────┼───────────────────────────┐
-                    │                               │                           │
-                    Historical Dashboard            Live Race Dashboard         2026 Prediction
-                    Power BI (1950–2026)          Streamlit (real-time)    Streamlit (ML + LLM)
+                                                        │
+                            ┌───────────────────────────┼───────────────────────────┐
+                            │                           │                           │
+                    Historical Dashboard         Live Race Dashboard         2026 Prediction
+                    (1950 – 2026 data)          (real-time telemetry)    (ML model + LLM analyst)
 ```
 ---
 
@@ -39,7 +39,7 @@ OpenF1 API ──► Kafka ──► Spark Streaming ──► Bronze Delta Tabl
 
 ### Phase 0 — Infrastructure & Secrets
 
-All AWS infrastructure is provisioned using Terraform from the local terminal — nothing is clicked manually in the AWS console. This creates the S3 bucket used as the raw landing zone, an IAM policy scoped specifically to that bucket, and attaches it to the project user. The goal is full reproducibility: anyone can clone the repo and have identical infrastructure running in under a minute.
+Before any data is touched, all AWS infrastructure is provisioned using Terraform from the local terminal — nothing is clicked manually in the AWS console. This creates the S3 bucket used as the raw landing zone, an IAM policy scoped specifically to that bucket, and attaches it to the project user. The goal is full reproducibility: anyone can clone the repo and have identical infrastructure running in under a minute.
 
 All credentials — AWS keys and the Kaggle API token — are stored as Databricks secrets and never appear in any notebook or file. Every notebook pulls them at runtime. Nothing sensitive ever touches GitHub.
 
@@ -61,7 +61,7 @@ Column names are sanitized on ingestion — special characters and spaces are st
 
 Large tables like lap times and results are partitioned by year. F1 queries are almost always filtered to a specific season, so partitioning eliminates full table scans on the tables with millions of rows.
 
-19 tables are ingested in total, covering race results, lap times, pit stops, qualifying, driver and constructor standings, circuits, safety car events, and historical fatality records.
+19 tables are ingested in total, covering race results, lap times, pit stops, qualifying, driver and constructor standings, circuits, safety car events, and historical fatality records. The schema is passed in as a Databricks widget so the same notebook runs against dev or prod without any code changes.
 
 ---
 
@@ -105,62 +105,59 @@ Transforms are split across three utility notebooks in `scripts/utils/`:
 | `race_events_fatal_accidents_drivers` | Parse historical 2-digit dates (`10/24/71` → `1971-10-24`) using LEGACY time parser |
 | `race_events_fatal_accidents_marshalls` | Same date fix as above |
 
+Time columns are stored as millisecond integers (lap times, pit stop durations) or `HH:mm:ss` strings (wall clock session times). Date and session time columns in `races` are kept as strings in Silver so Gold can freely concat them into proper `TimestampType` columns.
+
 ---
 
 ### Phase 5 — Gold Layer
 
-The entire Gold layer is built in dbt SQL models running locally in VSCode and connecting to Databricks remotely. SQL is more readable for analytical transforms, dbt handles dependency ordering between models automatically, and the auto-generated lineage graph reflects how production data teams actually build Gold layers.
+The entire Gold layer is built in dbt SQL models rather than PySpark notebooks. SQL is more readable for analytical transforms, dbt handles dependency ordering between models automatically, built-in tests run on every build, and the auto-generated lineage graph and data dictionary reflect how production data teams actually build Gold layers.
 
-**13 models across 4 layers:**
+Session timestamps are constructed in Gold by concatenating Silver's separate date and time string columns — `fp1_date` + `fp1_time` → `fp1_timestamp` as a proper `TimestampType`.
 
-| Layer | Models |
-|---|---|
-| Dimensions | `dim_circuits`, `dim_drivers`, `dim_teams`, `dim_races` |
-| Facts | `fact_results`, `fact_sprint_results`, `fact_qualifying`, `fact_lap_times`, `fact_pit_stops` |
-| Standings | `standings_drivers`, `standings_teams` |
-| Events | `event_race_incidents`, `event_fatal_accidents` |
-
-Key design decisions:
-- `race_key` — a derived natural identifier (`2023_British_Grand_Prix`) built once in `dim_races` and propagated to all fact and event tables, giving the event tables a proper join key to the main schema
-- `dnf_flag` — boolean derived from `positiontext`, critical ML feature for DNF rate analysis
-- `positions_gained` — `grid - positionorder`, one of the most common F1 performance metrics
-- `pit_stop_count` and `total_pit_time_ms` — aggregated from `fact_pit_stops` and joined into `fact_results`
-- Safety cars and red flags combined into `event_race_incidents` with an `incident_type` column
-- Driver and marshal fatal accidents combined into `event_fatal_accidents` with a `type` column
+dbt models and tests are documented in [`docs/gold.md`](./docs/gold.md) as they are finalized.
 
 ---
 
-### Phase 6 — Dashboards
-
-**Historical Analysis** built in Power BI connecting directly to Gold dbt tables. Four pages covering overview statistics, driver and team performance records, season-by-season championship story, and safety and incident history. Covers all 75 years of data from 1950 through 2026.
-
-**Live Race** built in Streamlit, reading from the continuously updating streaming Delta table. Auto-refreshes with a few seconds of end-to-end latency from track event to screen.
-
-**2026 Prediction** built in Streamlit, showing ranked driver standings with predicted points, feature importance breakdown, natural language LLM analyst commentary, and predicted vs. actual comparison updating as the 2026 season progresses.
-
----
-
-### Phase 7 — ML Prediction + LLM Analyst
+### Phase 6 — ML Prediction + LLM Analyst
 
 A Databricks notebook reads Gold fact tables, engineers features, and trains a Gradient Boosting Regressor to predict 2026 championship points per driver.
 
 Features include average points per race over the last 3 seasons, DNF rate, qualifying versus race pace delta, constructor momentum over the last 4 races, consistency score based on finishing position variance, and weather conditions from OpenF1 for sessions from 2023 onwards.
 
-The model is trained on regulation-change seasons only — 2014, 2017, and 2022 — the three most structurally comparable seasons to 2026.
+The model is trained on regulation-change seasons only — 2014, 2017, and 2022. These are the three most structurally comparable seasons to 2026, where major rule changes caused significant constructor performance reshuffles. Training on all 75 years would dilute this signal with stable-regulation data that is not predictive of a reshuffle year.
 
-The ML output is passed to an LLM which generates a natural language race analyst style breakdown of each prediction, grounded entirely in the model's actual output and historical data.
-
----
-
-### Phase 8 — Orchestration
-
-All batch jobs run in dependency order via Databricks Workflows. Bronze must succeed before Silver runs. Silver must pass before Gold builds. Gold must complete before the ML prediction runs. The Kafka consumer runs as a separate continuous streaming job independent of the batch pipeline.
+The ML output — ranked predicted standings with feature importance scores — is then passed to an LLM which generates a natural language race analyst style breakdown of each prediction. Rather than a table of numbers, the prediction dashboard surfaces a written explanation of why each driver is ranked where they are, grounded entirely in the model's actual output and historical data.
 
 ---
 
-### Phase 9 — CI/CD
+### Phase 7 — Orchestration
 
-Every push to GitHub triggers Python linting and dbt SQL compilation to catch syntax errors before they reach the cluster. Every merge to main runs the full validation suite. Green checks on every commit; red means fix before merging.
+All batch jobs run in dependency order via Databricks Workflows. Bronze must succeed before Silver runs. Silver must pass the data quality gate before Gold builds. Gold must complete before the ML prediction runs. Silver failures retry twice before triggering an email alert. The Kafka consumer runs as a separate continuous streaming job independent of the batch pipeline.
+
+---
+
+### Phase 8 — CI/CD
+
+Every push to GitHub triggers Python linting, dbt SQL compilation to catch syntax errors before they reach the cluster, and dbt schema tests against the dev schema. Every merge to main runs the full Great Expectations validation suite. Green checks on every commit; red means fix before merging.
+
+---
+
+### Phase 9 — Dashboards
+
+Three dashboards built on Gold dbt tables and the ML prediction output.
+
+**Historical Analysis** covers championship trends, circuit performance breakdowns, pit stop strategy impact, and driver and constructor comparisons across all 75 years of data from 1950 through 2026.
+
+**Live Race** shows real-time lap telemetry from the continuously updating streaming Delta table. The dashboard auto-refreshes on a short interval with a few seconds of end-to-end latency from track event to screen.
+
+**2026 Prediction** shows the ranked driver standings with predicted points, the feature importance breakdown explaining each prediction, a natural language analyst commentary generated by the LLM, and a predicted vs. actual comparison that updates as the 2026 season progresses.
+
+---
+
+## Architecture Decisions
+
+Detailed decisions documented in [`docs/decisions.md`](./docs/decisions.md).
 
 ---
 
@@ -173,22 +170,22 @@ Every push to GitHub triggers Python linting and dbt SQL compilation to catch sy
 | Databricks CLI | Secrets | Runtime credential management |
 | Apache Kafka | Streaming | Decoupled telemetry ingestion from OpenF1 |
 | Databricks + Delta Lake | Compute + Storage | Medallion architecture, MERGE upserts, ACID tables |
-| dbt (local) | Gold Layer | SQL models, dependency resolution, lineage |
+| Great Expectations + custom checks | Data Quality | Validation gate at Silver and Gold |
+| dbt | Gold Layer | SQL models, dependency resolution, built-in testing, lineage |
 | scikit-learn | ML | Gradient Boosting trained on regulation-change seasons |
 | LLM API | Prediction Analyst | Natural language breakdown of ML prediction output |
-| Databricks Workflows | Orchestration | Dependency ordering, retries |
-| GitHub Actions | CI/CD | Lint and compile on every push |
-| Power BI | Historical Dashboard | Business intelligence on 75 years of F1 data |
-| Streamlit | Live + Prediction Dashboard | Real-time telemetry and ML prediction display |
+| Databricks Workflows | Orchestration | Dependency ordering, retries, quality gate |
+| GitHub Actions | CI/CD | Lint and test on every push |
+| Databricks Dashboards | Serving | Historical, live, and prediction views |
 
 ---
 
 ## Repository Structure
+
 ```
 formula-one-project/
 ├── configs/
 │   └── credentials
-├── docs/
 ├── scripts/
 │   ├── exploration/
 │   │   ├── main_explore
@@ -199,17 +196,8 @@ formula-one-project/
 │       │   └── kaggle_to_s3
 │       ├── 1_bronze/
 │       │   └── full_load_ingest
-│       ├── 2_silver/
-│       │   └── silver_transforms
-│       └── 3_gold/
-│           └── dbt_f1/
-│               ├── models/
-│               │   ├── dimensions/
-│               │   ├── facts/
-│               │   ├── standings/
-│               │   └── events/
-│               ├── dbt_project.yml
-│               └── sources.yml
+│       └── 2_silver/
+│           └── silver_transforms
 ├── terraform/
 │   ├── iam.tf
 │   ├── main.tf
@@ -217,9 +205,10 @@ formula-one-project/
 │   ├── s3.tf
 │   └── variables.tf
 └── utils/
-├── general_transforms_utils
-├── helper_utils
-└── specific_transforms_utils
+    ├── general_transforms_utils
+    ├── great_expectations_utils
+    ├── helper_utils
+    └── specific_transforms_utils
 ```
 ---
 
@@ -246,9 +235,9 @@ formula-one-project/
 
 ## How to Run
 
-**Prerequisites:** AWS account with IAM credentials · Terraform installed · Databricks workspace with CLI configured · Kaggle account and API token · Python 3.11+
+**Prerequisites:** AWS account with IAM credentials · Terraform installed · Databricks workspace with CLI configured · Kaggle account and API token · Python 3.9+
 
-Provision infrastructure by running Terraform from the `terraform/` directory. Store AWS and Kaggle credentials as Databricks secrets under the `f1-secrets` scope. Run the ingestion, Bronze, and Silver notebooks in order from the Databricks workspace. From the `scripts/pipeline/3_gold/dbt_f1/` directory, run `dbt run` to build the Gold layer. Start the Kafka producer and consumer as continuous jobs during race weekends. Run `dbt docs serve` to view the lineage graph.
+Provision infrastructure by running Terraform from the `terraform/` directory. Store AWS and Kaggle credentials as Databricks secrets under the `f1-secrets` scope. Run the ingestion, Bronze, Silver, Gold, and ML notebooks in order from the Databricks workspace. Start the Kafka producer and consumer as continuous jobs during race weekends. Use `dbt build` and `dbt docs serve` from the Gold dbt directory to build the Gold layer and view the lineage graph. Detailed setup notes are in [`docs/`](./docs/).
 
 ---
 
@@ -256,7 +245,6 @@ Provision infrastructure by running Terraform from the `terraform/` directory. S
 
 - [Kaggle — James Trotman F1 Race Data](https://www.kaggle.com/datasets/jtrotman/formula-1-race-data)
 - [Kaggle — James Trotman F1 Race Events](https://www.kaggle.com/datasets/jtrotman/formula-1-race-events)
-- [OpenF1 API](https://openf1.org/)
 
 ---
 
